@@ -757,6 +757,7 @@ class CrossEntropyLossModel(Feedable):
             cases (list[ParseCase])
         """
         labels = [c.choices.index(c.decision) for c in cases]
+        print("labels:", labels)
         return {self._labels: np.array(labels)}
 
     @property
@@ -805,6 +806,11 @@ class TrainParseModel(Optimizable, Feedable):
 
         with tf.name_scope('TrainParseModel'):
             weights = tf.placeholder(tf.float32, [None])
+
+            probs = tf.nn.softmax(parse_model.logits)
+            # prp_loss = tf.log(1- tf.reduce_sum(probs)) - 1/tf.reduce_sum(weights) * tf.reduce_sum(weights * tf.log(probs))
+            # loss = tf.reduce_sum(prp_loss)
+            
             weighted_losses = losses * weights
             loss = tf.reduce_sum(weighted_losses)
 
@@ -873,6 +879,7 @@ class TrainParseModel(Optimizable, Feedable):
         # when updating the model, we always acknowledge previous utterances
 
         feed[self._weights] = np.array(weights)
+        print("weights", np.array(weights))
         return feed
 
     def train_step(self, cases, weights, caching):
