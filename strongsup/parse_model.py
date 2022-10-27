@@ -748,21 +748,60 @@ class CrossEntropyLossModel(Feedable):
         """
         with tf.name_scope('LossModel'):
             self._labels = tf.placeholder(tf.int32, shape=[None], name='labels')
-            self._losses = tf.nn.sparse_softmax_cross_entropy_with_logits(logits, self._labels, name='losses')
+            self._weights = tf.placeholder(tf.float32, shape=[None], name='weights')
 
-    def inputs_to_feed_dict(self, cases):
+            losses = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=self._labels, name='losses')            
+            weighted_losses = losses * self._weights
+            self._loss = tf.reduce_sum(weighted_losses)
+
+
+    def inputs_to_feed_dict(self, cases, weights):
         """For each ParseCase, map case.decision to the appropriate placeholder.
 
         Args:
             cases (list[ParseCase])
         """
         labels = [c.choices.index(c.decision) for c in cases]
-        print("labels:", labels)
-        return {self._labels: np.array(labels)}
+        return {self._labels: np.array(labels), self._weights: np.array(weights)}
 
     @property
-    def losses(self):
-        return self._losses
+    def loss(self):
+        return self._loss
+
+class PrpLossModel(Feedable):
+    """Defines a prp loss on the decision of a ParseCase."""
+
+    def __init__(self, logits):
+        """Define the loss model.
+
+        Args:
+            logits (Tensor): a tensor of shape (batch_size, max_choices)
+        """
+        with tf.name_scope('LossModel'):
+            self._labels = tf.placeholder(tf.int32, shape=[None], name='labels')
+            self._weights = tf.placeholder(tf.float32, shape=[None], name='weights')
+
+            logits = tf.map_fn(lambda x: tf.gather(x[0],x[1]), (logits, self._labels), dtype=tf.float32)
+            probs = tf.exp(logits)
+            weights = tf.cast(tf.equal(self._weights, 1.0), dtype=tf.float32)
+            prp1 = tf.log(1e-5 + 1- tf.reduce_sum(probs * weights))
+            prp2 = 1/(1e-5 + tf.reduce_sum(weights)) * tf.reduce_sum(weights * tf.log(probs))
+            self._loss = prp1 - prp2
+
+
+    def inputs_to_feed_dict(self, cases, weights):
+        """For each ParseCase, map case.decision to the appropriate placeholder.
+
+        Args:
+            cases (list[ParseCase])
+        """
+        labels = [c.choices.index(c.decision) for c in cases]
+        return {self._labels: np.array(labels), self._weights: np.array(weights)}
+
+    @property
+    def loss(self):
+        return self._loss
+
 
 
 class LogitLossModel(Feedable):
@@ -776,24 +815,30 @@ class LogitLossModel(Feedable):
         """
         with tf.name_scope('LossModel'):
             self._labels = tf.placeholder(tf.int32, shape=[None], name='labels')
+            self._weights = tf.placeholder(tf.float32, shape=[None], name='weights')
+            
             # Pick out the correct logit terms using gather
             shape = tf.shape(logits)
             flattened_logits = tf.reshape(logits, [-1])
-            self._losses = - tf.gather(flattened_logits,
-                                       tf.range(shape[0]) * shape[1] + self._labels)
+            losses = - tf.gather(flattened_logits,
+                                 tf.range(shape[0]) * shape[1] + self._labels)
 
-    def inputs_to_feed_dict(self, cases):
+            weighted_losses = losses * self._weights
+            self._loss = tf.reduce_sum(weighted_losses)
+            
+
+    def inputs_to_feed_dict(self, cases, weights):
         """For each ParseCase, map case.decision to the appropriate placeholder.
 
         Args:
             cases (list[ParseCase])
         """
         labels = [c.choices.index(c.decision) for c in cases]
-        return {self._labels: np.array(labels)}
+        return {self._labels: np.array(labels), self._weights: np.array(weights)}
 
     @property
-    def losses(self):
-        return self._losses
+    def loss(self):
+        return self._loss
 
 
 class TrainParseModel(Optimizable, Feedable):
@@ -802,17 +847,10 @@ class TrainParseModel(Optimizable, Feedable):
     def __init__(self, parse_model, loss_model_factory, learning_rate,
                  optimizer_opt, max_batch_size=None):
         loss_model = loss_model_factory(parse_model.logits)
-        losses = loss_model.losses
+        loss = loss_model.loss
 
         with tf.name_scope('TrainParseModel'):
             weights = tf.placeholder(tf.float32, [None])
-
-            probs = tf.nn.softmax(parse_model.logits)
-            # prp_loss = tf.log(1- tf.reduce_sum(probs)) - 1/tf.reduce_sum(weights) * tf.reduce_sum(weights * tf.log(probs))
-            # loss = tf.reduce_sum(prp_loss)
-            
-            weighted_losses = losses * weights
-            loss = tf.reduce_sum(weighted_losses)
 
             step = tf.get_variable('step', shape=[], dtype=tf.int32,
                                    initializer=tf.constant_initializer(0), trainable=False)
@@ -873,13 +911,12 @@ class TrainParseModel(Optimizable, Feedable):
             feed_dict
         """
         feed = {}
-        feed.update(self._loss_model.inputs_to_feed_dict(cases))
+        feed.update(self._loss_model.inputs_to_feed_dict(cases, weights))
         feed.update(self._parse_model.inputs_to_feed_dict(cases, ignore_previous_utterances=False,
                                                           caching=caching))
         # when updating the model, we always acknowledge previous utterances
 
         feed[self._weights] = np.array(weights)
-        print("weights", np.array(weights))
         return feed
 
     def train_step(self, cases, weights, caching):

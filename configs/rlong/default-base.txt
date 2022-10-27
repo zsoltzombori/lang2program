@@ -45,6 +45,7 @@ decoder {
         max_stack_size = 3
         action_must_clear_beam = true
     }
+    loss_type = xent
     normalization = local
     train_exploration_policy {
         type = beam-search
