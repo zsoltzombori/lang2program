@@ -26,7 +26,7 @@ from strongsup.parse_model import (
     HistoryEmbedder,
     SimplePredicateScorer, AttentionPredicateScorer,
     SoftCopyPredicateScorer, PredicateScorer,
-    CrossEntropyLossModel, LogitLossModel,
+    CrossEntropyLossModel, LogitLossModel,PrpLossModel,
     ParseModel, TrainParseModel,
     ExecutionStackEmbedder, RLongObjectEmbedder)
 from strongsup.utils import OptimizerOptions
@@ -203,7 +203,10 @@ class Experiment(gtd.ml.experiment.TFExperiment):
                 utterance_embedder, scorer_factory, config.h_dims,
                 self._domain, delexicalized)
 
-        if self.config.decoder.normalization == 'local':
+        if self.config.decoder.loss_type == "prp":
+            loss_model_factory = PrpLossModel
+        # elif self.config.decoder.normalization == 'local':
+        elif self.config.decoder.loss_type == "xent":
             loss_model_factory = CrossEntropyLossModel
         else:
             loss_model_factory = LogitLossModel
