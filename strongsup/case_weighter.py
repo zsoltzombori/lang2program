@@ -25,6 +25,43 @@ class CaseWeighter(object):
         pass
 
 
+class PRPCaseWeighter(CaseWeighter):
+    def __init__(self, parse_model):
+        self._parse_model = parse_model
+
+    def _destroy_path_scores(self, paths):
+        # A bit of an information-hiding hack.
+        # Now that the path weighter has used the path scores, prevent anyone else from using them by overwriting
+        # them with None
+        for path in paths:
+            for case in path:
+                case.choice_logits = None
+                case.choice_log_probs = None
+
+    def _weight_paths(self, paths, example):
+        # paths may have incorrect scores, left there by some exploration policy
+        self._parse_model.score_paths(
+                paths, ignore_previous_utterances=False, caching=False)
+
+        mask = [] 
+        for path in paths:
+            m = 1 if check_denotation(example.answer, path.finalized_denotation) else -1
+            mask.append(m)
+        mask = np.array(mask)
+        weights = mask
+
+        self._destroy_path_scores(paths)  # destroy scores so no one else misuses them
+
+        return weights
+
+    def __call__(self, paths, example):
+        path_weights = self._weight_paths(paths, example)
+        case_weights = []
+        for path, path_wt in izip(paths, path_weights):
+            case_weights.append([path_wt] * len(path))
+
+        return case_weights
+
 class MMLCaseWeighter(CaseWeighter):
     def __init__(self, alpha, beta, parse_model):
         self._alpha = alpha
@@ -74,7 +111,7 @@ class MMLCaseWeighter(CaseWeighter):
 
         return case_weights
 
-
+    
 class REINFORCECaseWeighter(CaseWeighter):
     def __init__(self, correct_weight, incorrect_weight, value_function):
         """Weights the cases according to REINFORCE
@@ -133,5 +170,7 @@ def get_case_weighter(config, parse_model, value_function):
     elif config.type == 'reinforce':
         return REINFORCECaseWeighter(
                 config.correct_weight, config.incorrect_weight, value_function)
+    elif config.type == 'prp':
+        return PRPCaseWeighter(parse_model)
     else:
         raise ValueError('CaseWeighter {} not supported.'.format(config.type))

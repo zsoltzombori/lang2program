@@ -1,9 +1,7 @@
 decoder {
     loss_type = prp
     case_weighter {
-        type = reinforce
-        correct_weight = 1
-        incorrect_weight = -0.001
-        
+        type = prp
+        beta = 0
     }
 }

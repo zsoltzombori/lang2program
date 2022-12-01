@@ -183,8 +183,11 @@ class Decoder(object):
         all_cases = []  # a list of ParseCases to give to ParseModel
         all_case_weights = [] # the weights associated with the cases
         for example, paths in zip(examples, beams):
+            
             case_weights = self._case_weighter(paths, example)
+            print("case weights:", case_weights)
             case_weights = flatten(case_weights)
+            print("case weights:", case_weights)
             cases = flatten(paths)
             assert len(case_weights) == sum(len(p) for p in paths)
 

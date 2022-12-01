@@ -740,7 +740,7 @@ class ParseModel(Feedable):
 class CrossEntropyLossModel(Feedable):
     """Defines a standard cross entropy loss on the decision of a ParseCase."""
 
-    def __init__(self, logits):
+    def __init__(self, logits, log_probs):
         """Define the loss model.
 
         Args:
@@ -771,22 +771,33 @@ class CrossEntropyLossModel(Feedable):
 class PrpLossModel(Feedable):
     """Defines a prp loss on the decision of a ParseCase."""
 
-    def __init__(self, logits):
+    def __init__(self, logits, log_probs):
         """Define the loss model.
 
         Args:
-            logits (Tensor): a tensor of shape (batch_size, max_choices)
+            log_probs (Tensor): a tensor of shape (batch_size, max_choices)
         """
         with tf.name_scope('LossModel'):
             self._labels = tf.placeholder(tf.int32, shape=[None], name='labels')
             self._weights = tf.placeholder(tf.float32, shape=[None], name='weights')
 
-            logits = tf.map_fn(lambda x: tf.gather(x[0],x[1]), (logits, self._labels), dtype=tf.float32)
-            probs = tf.exp(logits)
-            weights = tf.cast(tf.equal(self._weights, 1.0), dtype=tf.float32)
-            prp1 = tf.log(1e-5 + 1- tf.reduce_sum(probs * weights))
-            prp2 = 1/(1e-5 + tf.reduce_sum(weights)) * tf.reduce_sum(weights * tf.log(probs))
-            self._loss = prp1 - prp2
+            log_probs = tf.map_fn(lambda x: tf.gather(x[0],x[1]), (log_probs, self._labels), dtype=tf.float32)
+            probs = tf.exp(log_probs)
+            
+            mask_allowed = tf.cast(tf.equal(1.0, self._weights), tf.float32)
+            mask_disallowed = tf.cast(tf.equal(-1.0, self._weights), tf.float32)
+            prp1 = 1 - tf.reduce_sum(mask_allowed * probs)
+            prp1 = tf.log(tf.maximum(1e-5, prp1))
+            k = tf.maximum(1.0, tf.reduce_sum(mask_allowed))
+            prp2 = tf.reduce_sum(log_probs * mask_allowed) / k
+            prp_loss = prp1 - prp2
+
+            prp1_disallowed = 1 - tf.reduce_sum(mask_disallowed * probs)
+            prp1_disallowed = tf.log(tf.maximum(1e-5, prp1_disallowed))
+            k_disallowed = tf.maximum(1.0, tf.reduce_sum(mask_disallowed))
+            prp2_disallowed = tf.reduce_sum(log_probs * mask_disallowed) / k_disallowed
+            prp_loss_disallowed = prp1_disallowed - prp2_disallowed
+            self._loss = prp_loss - prp_loss_disallowed
 
 
     def inputs_to_feed_dict(self, cases, weights):
@@ -796,6 +807,8 @@ class PrpLossModel(Feedable):
             cases (list[ParseCase])
         """
         labels = [c.choices.index(c.decision) for c in cases]
+        print("labels: \n", np.array(labels))
+        print("weights:\n", np.array(weights))
         return {self._labels: np.array(labels), self._weights: np.array(weights)}
 
     @property
@@ -807,7 +820,7 @@ class PrpLossModel(Feedable):
 class LogitLossModel(Feedable):
     """Defines a loss based on the logit."""
 
-    def __init__(self, logits):
+    def __init__(self, logits, log_probs):
         """Define the loss model.
 
         Args:
@@ -846,7 +859,7 @@ class TrainParseModel(Optimizable, Feedable):
 
     def __init__(self, parse_model, loss_model_factory, learning_rate,
                  optimizer_opt, max_batch_size=None):
-        loss_model = loss_model_factory(parse_model.logits)
+        loss_model = loss_model_factory(parse_model.logits, parse_model.log_probs)
         loss = loss_model.loss
 
         with tf.name_scope('TrainParseModel'):
